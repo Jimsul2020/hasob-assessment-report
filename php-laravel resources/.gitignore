@@ -1,0 +1,59 @@
+# ============================================================
+# Laravel / PHP – .gitignore
+# Covers all sub-projects in this repo
+# ============================================================
+
+# ----- Dependency folders -----
+dmo-savings-bond-module/vendor/
+dmo-savings-bond-portal/vendor/
+hasob-foundation-core-bs-5/vendor/
+node_modules/
+
+# ----- Environment & secrets -----
+.env
+.env.*
+!.env.example
+
+# ----- Laravel compiled/cached files -----
+bootstrap/cache/
+storage/framework/cache/
+storage/framework/sessions/
+storage/framework/testing/
+storage/framework/views/
+storage/logs/
+*.log
+
+# ----- Build / compiled assets -----
+public/hot
+public/storage
+public/mix-manifest.json
+public/build/
+
+# ----- IDE & OS files -----
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# ----- PHPUnit -----
+.phpunit.result.cache
+phpunit.xml
+coverage/
+
+# ----- Composer lock (optional – keep if you want reproducible builds) -----
+# composer.lock
+
+# ----- NPM / Yarn -----
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# ----- Misc -----
+*.zip
+*.tar.gz
+.sass-cache/

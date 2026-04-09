@@ -1,0 +1,130 @@
+# Loan Save-as-Draft Feature
+
+Users processing a loan through the multi-step wizard can save their progress at any point. When they return later, a **Loan Drafts** menu in the sidebar shows their in-progress applications. Clicking **Continue** restores all cached wizard state and returns them to the correct step. Submitting the final loan deletes the draft automatically.
+
+## How the existing flow works
+
+| Step | View partial | Cache keys written |
+|------|-------------|--------------------|
+| 1 – BVN verify | [init_form.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/loan/includes/init_form.blade.php) → POST `/loans/verify` | `bvn`, `application_{bvn}_request` |
+| 2 – Customer review | [verified_details.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/loan/includes/verified_details.blade.php) → POST `/loans/accept_application` | `customer_biodata_{bvn}` |
+| 3 – Loan data | [application_data_form.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/loan/includes/application_data_form.blade.php) → POST `/loans/confirm_application` | `loan_application_details_{bvn}_request` |
+| 4 – Confirmation | [confirmation_form.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/loan/includes/confirmation_form.blade.php) → POST `/loans` (store) | final flush on success |
+
+All cache is tagged with `loan_applications_{username}()` and expires in `$cacheExpireAt = 7200` seconds (2 hours).
+
+## Proposed Changes
+
+---
+
+### Routes
+
+#### [MODIFY] [web.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/routes/web.php)
+
+Inside the `auth` middleware group add four routes for draft management:
+
+```php
+// Loan Drafts
+Route::get('/loan-drafts', [LoanController::class, 'listDrafts'])->name('loan.drafts');
+Route::post('/loan-draft/save', [LoanController::class, 'saveDraft'])->name('loan.draft.save');
+Route::get('/loan-draft/continue/{key}', [LoanController::class, 'continueDraft'])->name('loan.draft.continue');
+Route::delete('/loan-draft/delete/{key}', [LoanController::class, 'deleteDraft'])->name('loan.draft.delete');
+```
+
+---
+
+### Controller
+
+#### [MODIFY] [LoanController.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/app/Http/Controllers/Loan/LoanController.php)
+
+**4 new public methods + 1 update to [store()](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/app/Http/Controllers/Loan/LoanController.php#1904-2012)**
+
+**`saveDraft(Request $request)`**  
+Called via AJAX at any wizard step. Receives the current form data plus the current `step` number. It:
+1. Reads all current cache keys for this user's BVN session.
+2. Generates a unique draft key: `loan_draft_{username}_{timestamp}`.
+3. Stores a snapshot in a long-lived cache (TTL = 7 days): `loan_user_drafts_{username}` → array of draft index entries (`key`, `bvn`, `step`, `fullname`, `amount`, `loan_type`, `created_at`).
+4. Also stores `loan_draft_{key}` → the full cache state snapshot.
+5. Returns JSON `{success: true, message: "Draft saved"}`.
+
+**`listDrafts()`**  
+Reads `loan_user_drafts_{username}` from cache and returns the `loan/drafts` view with the list.
+
+**`continueDraft($key)`**  
+1. Fetches `loan_draft_{key}` from cache.
+2. Restores all individual cache keys (tagged) from the snapshot.
+3. Redirects to `/loans/create` – the wizard will naturally pick up the restored cache state and the JS will re-render the correct step.
+
+**`deleteDraft($key)`**  
+Removes `loan_draft_{key}` from cache and updates the index, removing the entry with that key.
+
+**[store()](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/app/Http/Controllers/Loan/LoanController.php#1904-2012) update**  
+After the successful `DB::commit()` and `Cache::tags()->flush()` at line ~2005, call `$this->deleteDraftForBvn($bvn)` (a private helper) to remove any draft keyed for this BVN from the drafts index and the draft snapshot cache.
+
+---
+
+### Views
+
+#### [NEW] [drafts.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/loan/drafts.blade.php)
+
+Page extends `layouts.master`. Shows a DataTable with columns:
+- Applicant BVN (partially masked)
+- Applicant Name (if known from cache)
+- Loan Amount
+- Step reached (e.g. "Loan Data Form")
+- Saved At
+- Actions: **Continue** button (green) + **Delete** button (red)
+
+#### [MODIFY] [init_form.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/loan/includes/init_form.blade.php)
+Add a **"Save as Draft"** button (grey/outline) next to the Verify button. On click, it POSTs the form data to `/loan-draft/save` via AJAX with `step=1`.
+
+#### [MODIFY] [verified_details.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/loan/includes/verified_details.blade.php)
+Add a **"Save as Draft"** button near the Proceed button row. On click, posts `{bvn, step:2}` to `/loan-draft/save`.
+
+#### [MODIFY] [application_data_form.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/loan/includes/application_data_form.blade.php)
+Add a **"Save as Draft"** button. On click, serialises the form and posts to `/loan-draft/save` with `step=3`.
+
+#### [MODIFY] [confirmation_form.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/loan/includes/confirmation_form.blade.php)
+Add a **"Save as Draft"** button. On click, posts `{bvn, step:4}` to `/loan-draft/save`.
+
+#### [MODIFY] [nav-sidebar.blade.php](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/resources/views/layouts/partials/nav-sidebar.blade.php)
+Under the `@if (hasPermission(['CREATE_LOAN']))` block that shows "Individual Loan Application", add:
+
+```html
+<li class="nav-item {{ request()->is('loan-drafts') ? 'active' : '' }}">
+    <a href="{{ route('loan.drafts') }}" class="nav-link nav-toggle">
+        <span class="title">Loan Drafts</span>
+    </a>
+</li>
+```
+
+---
+
+### JavaScript
+
+#### [MODIFY] [public/js/loan.js](file:///c:/Users/EliteBook%20830%20G6/Desktop/Projects/tsa_portal/public/js/loan.js)
+Add a shared AJAX handler for clicks on any `.btn-save-draft` button:
+- Collects form fields from the nearest `<form>`.
+- Appends `step` number (from a `data-step` attribute on the button).
+- POSTs to `/loan-draft/save`.
+- Shows a toast notification: *"Draft saved successfully"*.
+- Does **not** navigate away.
+
+---
+
+## Verification Plan
+
+### Manual Verification
+
+1. Log in as a user with `CREATE_LOAN` permission.
+2. Navigate to **Individual Loan Application** and enter a BVN → click **Save as Draft**.
+3. Log out.
+4. Log back in → open **Loan Drafts** in the sidebar → confirm the draft appears in the table with correct BVN, step ("BVN Verify"), and saved date.
+5. Click **Continue** → confirm you are taken to `/loans/create` with the init_form pre-filled (BVN auto-populated).
+6. Continue past step 2 (Customer Review) → click **Save as Draft** again.
+7. Open Loan Drafts → confirm the draft row now shows step "Customer Review".
+8. Continue to step 3 (Loan Data Form) → fill in amount/type/tenor → click **Save as Draft**.
+9. Open Loan Drafts → confirm step shows "Loan Data Form" and amount is visible.
+10. Click **Continue** → confirm the application_data_form is rendered with the previously filled values.
+11. Proceed through step 4 → submit the loan → confirm the draft is **removed** from Loan Drafts.
+12. Test **Delete** button on Loan Drafts page → confirm it disappears without page reload.
